@@ -1,10 +1,5 @@
-# /// script
-# dependencies = ["fastapi", "uvicorn", "python-multipart","google-genai","pydantic", "requests", "Pillow"]
-# ///
-
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sympy import im
 import uvicorn
 import pathlib
 import os
@@ -1014,3 +1009,4 @@ async def upload_files(request: Request):
 if __name__ == "__main__":
     # uvicorn.run("app:app", host="127.0.0.1", port=7680, reload=True)
     uvicorn.run("app:app", host="127.1.1.1", port=8000)
+
