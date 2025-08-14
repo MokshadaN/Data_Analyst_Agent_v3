@@ -24,7 +24,10 @@ import logging
 from datetime import datetime
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+load_dotenv()
 
+import os
 # ---- Create logs folder and per-run subfolder ----
 BASE_LOG_DIR = "logs"
 os.makedirs(BASE_LOG_DIR, exist_ok=True)
@@ -1009,4 +1012,5 @@ async def upload_files(request: Request):
 if __name__ == "__main__":
     # uvicorn.run("app:app", host="127.0.0.1", port=7680, reload=True)
     uvicorn.run("app:app", host="127.1.1.1", port=8000)
+
 
