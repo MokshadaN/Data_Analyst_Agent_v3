@@ -4,7 +4,10 @@ import json
 import time
 from google import genai
 from google.genai.types import GenerateContentConfig
+from dotenv import load_dotenv
+load_dotenv()
 
+import os
 GEMINI_MODEL_DEFAULT = "gemini-2.5-flash"
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
@@ -98,3 +101,4 @@ def test_gemini_call_for_code():
 
 if __name__ == "__main__":
     test_gemini_call_for_code()
+
