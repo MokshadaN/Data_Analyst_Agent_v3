@@ -8,7 +8,10 @@ from prompts import PromptManager
 from llm_calls.gemini_llm import gemini_call_for_code  # updated import
 from llm_calls.openai_call import openai_call_for_code_responses
 import time
+from dotenv import load_dotenv
+load_dotenv()
 
+import os
 os.makedirs("generated_code", exist_ok=True)
 
 
@@ -172,3 +175,4 @@ def _build_repair_prompt(system_prompt, plan,questions, data_files, prev_code, e
     )
 
     return repair_system_prompt, repair_user_prompt
+
