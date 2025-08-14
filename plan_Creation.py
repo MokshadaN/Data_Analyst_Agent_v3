@@ -16,7 +16,10 @@ from pydantic import BaseModel
 from enum import Enum
 from prompts import PromptManager
 import re
+from dotenv import load_dotenv
+load_dotenv()
 
+import os
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -94,4 +97,5 @@ def run_planner_agent_json_with_feedback_looping(questions ,files, max_retries=2
             if attempt == max_retries:
                 raise RuntimeError("Gemini planner failed after maximum retries.") from e
             attempt += 1
+
 
