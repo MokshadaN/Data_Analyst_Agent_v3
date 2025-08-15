@@ -1010,9 +1010,9 @@ async def upload_files(request: Request):
 # Entrypoint
 # -------------------------------------------------------------------
 if __name__ == "__main__":
-    # uvicorn.run("app:app", host="127.0.0.1", port=7680, reload=True)
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("app:app", host="127.1.1.1", port=port)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
 
 
 
