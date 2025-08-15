@@ -1,5 +1,10 @@
+# /// script
+# dependencies = ["fastapi", "uvicorn", "python-multipart","google-genai","pydantic", "requests", "Pillow"]
+# ///
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from sympy import im
 import uvicorn
 import pathlib
 import os
@@ -24,10 +29,7 @@ import logging
 from datetime import datetime
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
-load_dotenv()
-
-import os
+import shutil
 # ---- Create logs folder and per-run subfolder ----
 BASE_LOG_DIR = "logs"
 os.makedirs(BASE_LOG_DIR, exist_ok=True)
@@ -104,7 +106,7 @@ async def ui(request: Request):
 # Config
 # -------------------------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# GEMINI_API_KEY = "AIzaSyDh7TfjKwBEI2eoE4xObDfyBbRh25YGe8k"
+# GEMINI_API_KEY = "AIzaSyCJqJjDOQW1KdgEknnRrh5V5dzKbKNoSas"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
@@ -798,6 +800,80 @@ def _probe_url(url: str, timeout=15, save_dir="tables_output"):
         info["source_type"] = "unknown"
         return info
 
+from openai import OpenAI
+from dotenv import load_dotenv
+import os
+import json
+import logging
+
+# Load environment variables
+load_dotenv()
+API_KEY = os.getenv("OPENAI_API_KEY")
+if not API_KEY:
+    raise ValueError("OPENAI_API_KEY environment variable not set.")
+
+openai_client = OpenAI(api_key=API_KEY)
+
+model_to_use = "gpt-4.1-mini"  # change if you want
+# You must have _probe_url defined/imported somewhere before this function
+def get_metadata_url(u):
+    system_prompt = """
+You are a URL classifier and metadata extraction expert.
+You MUST respond with a valid JSON object with the following boolean fields:
+- js_rendering: true if the page requires dynamic JavaScript rendering to access content
+- pagination: true if the page requires visiting multiple pages to get complete data
+- has_tables: true if the page has one or more structured HTML tables
+- is_api: true if the page is an API endpoint (and requires extraction parameters)
+Do NOT scrape or fetch heavy content. Just classify based on the URL and known patterns.
+Do NOT add any extra commentary — JSON only.
+Example output:
+{
+  "js_rendering": true,
+  "pagination": true,
+  "has_tables": true,
+  "is_api": false
+}
+"""
+
+    input_payload = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": u}
+    ]
+
+    try:
+        response = openai_client.responses.create(
+            model=model_to_use,
+            input=input_payload,
+            temperature=0
+        )
+        llm_output = response.output_text.strip()
+        classification = json.loads(llm_output)
+
+        # Always include URL
+        classification["url"] = u
+
+        # Only keep True flags
+        filtered = {k: v for k, v in classification.items() if v is True}
+        filtered["url"] = u  # make sure URL stays
+
+        # If tables exist → add probe metadata, else skip
+        if filtered.get("has_tables"):
+            try:
+                probe_info = _probe_url(u)
+                html_meta = probe_info.get("html_metadata", {})
+                if html_meta.get("tables_total", 0) > 0:
+                    filtered["html_metadata"] = probe_info
+                else:
+                    filtered.pop("has_tables", None)
+            except Exception as e:
+                logging.error(f"[CLASSIFIER] _probe_url failed for {u}: {e}")
+                filtered.pop("has_tables", None)
+
+        return filtered  # Always returns at least {"url": ...}
+
+    except Exception as e:
+        logging.error(f"[CLASSIFIER] Failed to classify {u}: {e}")
+        return {"url": u, "error": str(e)}
 
 import unicodedata
 
@@ -845,6 +921,7 @@ def generate_dummy_json(questions: str):
         "Use dummy placeholder values of the correct type (integer, float, string, chart_uri). "
         "No explanations, no markdown, not neccesarily a correct answer , also terminate a base64 image uri do not loop till infinity"
         "Do not enclose it in ``` json ```"
+        "FORMAT Should be same as expected in question"
     )
     user_ans = f"""
 Create Dummy Answers for the questions and return ONLY A VALID JSON FORMAT AS expected in the questions
@@ -855,7 +932,10 @@ ENSURE THAT THE FORMAT IS ALWAYS CORRECT AND MATCHES THE ONE ASKED IN THE QUESTI
         response = client.models.generate_content(
             model="gemini-2.0-flash",
             contents=user_ans,
-            config=GenerateContentConfig(system_instruction=ans_prompt)
+            config=GenerateContentConfig(
+                system_instruction=ans_prompt,
+                temperature=0.35  # deterministic
+            )
         )
         llm_output = response.candidates[0].content.parts[0].text.strip()
         # Extract JSON object or array
@@ -944,9 +1024,15 @@ async def upload_files(request: Request):
         # 1) Extract & probe URLs in questions
         urls = _extract_urls_comprehensive(questions)
         for u in urls:
-            url_info = _probe_url(u)
-            # normalize to planner-friendly shape
-            data_files.append(url_info)
+            classification = get_metadata_url(u)
+            file_info = {
+                "filename": u,  # use the URL as filename for consistency
+                "url": u,
+                "source_type": "url",
+                "extension" : "html",
+                **classification  
+            }
+            data_files.append(file_info)
         print("[APP] 2: Received All URLS info")
         # make the values themselves safe for later usage
         data_files = _to_safe(data_files, mode="replace")
@@ -960,13 +1046,13 @@ async def upload_files(request: Request):
         
         logging.info("Step 1: Generating plan...")
         print("[APP] 3 Calling the planner Agent")
-        # return JSONResponse({"question" : questions , "files" : data_files})
         # Build plan from questions + uploaded artifacts
         # plan = run_planner_agent_files(questions, data_files)
         plan = run_planner_agent_json_with_feedback_looping(questions,data_files)
         save_to_log_folder("plan.json", plan)
         print("[APP] 4 GOT THE PLAN")
         
+        # return JSONResponse({"plan" : plan})
         if isinstance(plan, (dict, list)):
             # plan.json
             with open("plan.json", "w", encoding="utf-8") as f:
@@ -996,6 +1082,12 @@ async def upload_files(request: Request):
                 json.dump(parsed, f, indent=2, ensure_ascii=False)
         except json.JSONDecodeError:
             parsed = generate_dummy_json(questions)
+        try:
+            shutil.rmtree(upload_dir)  # deletes the entire uploads folder
+            os.makedirs(upload_dir, exist_ok=True)  # recreate empty folder for next request
+            logging.info("Uploads folder cleaned successfully.")
+        except Exception as e:
+            logging.warning(f"Could not clean uploads folder: {e}")
         return parsed
     except HTTPException:
         parsed = generate_dummy_json(questions)
@@ -1012,8 +1104,4 @@ async def upload_files(request: Request):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
-
-
-
 

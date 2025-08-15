@@ -644,6 +644,109 @@ Fill with *actual extracted values* ONLY IF THERE IS A NEED OF SOURCING FROM A T
 """
 
 
+    def url_js_rendering_prompt(self):
+        return """
+### JS-RENDERING-SPECIFIC INSTRUCTIONS
+- Explicitly mention that the site **requires JavaScript execution** to load the data.
+- Clearly state which DOM elements, IDs, or classes should be targeted for each metric.
+- Include transformations such as:
+  - Converting numeric strings (e.g., "₹1,234 Cr") into floats or integers.
+  - Removing currency symbols, commas, and units before numeric conversion.
+  - Normalizing date formats.
+- Include validation checks to ensure:
+  - All required elements are found on the page.
+  - Extracted data types are correct (e.g., revenue as float, sector as string).
+  - No unexpected null values remain in critical fields.
+
+The provided URL is JavaScript-rendered and may require dynamic interaction to retrieve financial and company information. Plan the sourcing step to use **Playwright** to render the page, extract the required values using targeted selectors, and apply all necessary cleaning, transformation, and validation steps.
+
+
+"""
+
+    def url_pagination_prompt(self):
+        return (
+            "The provided URL contains paginated content. "
+            "Plan the sourcing step to detect pagination links or API calls, "
+            "iterate over all pages until no further results remain, "
+            "and merge the extracted data into a single dataset."
+        )
+
+    def url_table_prompt(self):
+        return """
+    You are an expert data sourcing and preparation agent.
+
+    Your task is to generate a detailed, step-by-step plan to extract and prepare structured data from an HTML source (URL) that contains tables and possibly other relevant HTML elements.
+
+    Follow these **mandatory universal rules** for *all* websites:
+
+    ---
+
+    ### 1. Table Detection & Selection
+    - Use `pandas.read_html` to extract all tables from the page.
+    - Identify all tables relevant to the user’s questions — there may be more than one.
+    - Do not assume the first table is the only one; consider all tables and their relationships.
+    - If no relevant table is found, parse raw HTML elements (e.g., lists, `<div>` blocks, `<span>` text) using BeautifulSoup or lxml.
+
+    ---
+
+    ### 2. Multi-table Merging
+    - If data required for a question is spread across multiple tables, determine a join key (e.g., player name, team name, ID, year) and merge them.
+    - Normalize text (strip spaces, lowercase, remove accents) before joining.
+    - Use inner joins unless specified otherwise.
+    - If a join key is not unique, deduplicate by the most relevant context (e.g., latest year, matching category).
+
+    ---
+
+    ### 3. Raw HTML Parsing (Fallback)
+    - If information is outside tables (e.g., bullet lists, paragraphs, sidebars), scrape it directly.
+    - Extract specific attributes, links, or metadata if relevant.
+    - Combine HTML-parsed data with table data where necessary.
+
+    ---
+
+    ### 4. Data Cleaning & Transformation
+    - Remove footnotes, citations, and annotations (e.g., “[1]”, “(a)”, “†”) from all text fields.
+    - Parse date/year fields into integers or datetime objects.
+    - Ensure numeric fields are properly cast to `int` or `float`.
+    - Trim whitespace and unify case in text columns.
+    - Handle missing values appropriately (drop or fill based on context).
+    - Sort data consistently if relevant to analysis.
+
+    ---
+
+    ### 5. Validation
+    - Confirm that all columns required for the user’s questions exist after cleaning.
+    - Verify that joins between tables are correct and yield complete datasets.
+    - Ensure that all filtered datasets still have rows before analysis.
+
+    ---
+
+    ### 6. Output
+    - Produce a clean, merged, and validated DataFrame ready for analysis.
+    - Include all intermediate transformations in the plan for reproducibility.
+
+    ---
+
+    **Important:**  
+    Your plan must include all necessary sourcing, cleaning, transformation, and merging steps explicitly.  
+    Never assume that the question can be answered from a single table without verifying.
+    """
+
+    def url_api_prompt(self):
+        return (
+            "The provided URL is an API endpoint. "
+            "Plan the sourcing step to issue API requests with the correct method, headers, authentication, and query parameters. "
+            "If pagination or filtering applies, include logic to fetch all relevant data."
+        )
+
+    def url_text_only_prompt(self):
+        return (
+            "The provided URL contains structured text content without HTML tables or API endpoints. "
+            "Plan the sourcing step to extract the relevant textual information using an HTML parser such as BeautifulSoup, "
+            "applying targeted selectors to isolate required data."
+        )
+
+
     def html_instructions(self):
         return """
 **MANDATORY IMPORTANT INSTRUCTIONS THAT SHOULD BE PRESENT FOR URL SOURCING (HTML)**

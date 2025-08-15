@@ -16,12 +16,10 @@ from pydantic import BaseModel
 from enum import Enum
 from prompts import PromptManager
 import re
-from dotenv import load_dotenv
-load_dotenv()
 
-import os
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
+# GEMINI_API_KEY = "AIzaSyCfSRXnvYtJy_4vncmyBwcud-cC2mVBaBE"
+# GEMINI_API_KEY = "AIzaSyDh7TfjKwBEI2eoE4xObDfyBbRh25YGe8k"
 client = genai.Client(api_key=GEMINI_API_KEY)
 prompt_manager = PromptManager()
 
@@ -31,12 +29,40 @@ def run_planner_agent_json_with_feedback_looping(questions ,files, max_retries=2
     print("5: Got the General Prompts")
 
     csv_present = any(file.get("extension").lower() == ".csv" for file in files)
+    # print("6")
     json_present = any(file.get("extension").lower() == ".json" or file.get("type", "").lower() in {"application/json", "text/json"} for file in files)
+    # print("7")
     excel_present = any(file.get("extension").lower() in {".xls", ".xlsx"} for file in files)
+    # print("8")
     pdf_present = any(file.get("extension").lower() == ".pdf" for file in files)
+    # print("9")
     html_present  = any(f.get("source_type")=="html" for f in files)
+    # print("10")
     s3_present = ("s3://" in questions) or ("s3_region=" in questions) or ("s3://" in files) or ("s3_region=" in files)
+    # print("11")
+    url_present = any(f.get("source_type")=="url" for f in files)
     file_prompts = []
+    if url_present:
+        print("Url present")
+        for f in files:
+            if f.get("source_type") == "url":
+                info = f.get("information", {})
+
+                if info.get("js_rendering"):
+                    file_prompts.append(prompt_manager.url_js_rendering_prompt())
+
+                if info.get("pagination"):
+                    file_prompts.append(prompt_manager.url_pagination_prompt())
+
+                if info.get("has_tables"):
+                    file_prompts.append(prompt_manager.url_table_prompt())
+
+                if info.get("is_api"):
+                    file_prompts.append(prompt_manager.url_api_prompt())
+
+                if not any([info.get("has_tables"), info.get("is_api")]):
+                    file_prompts.append(prompt_manager.url_text_only_prompt())
+
     if s3_present:
         # file_prompts.append(prompt_manager.new_planner_agent_prompt())
         file_prompts.append(prompt_manager.s3_instructions())
@@ -97,5 +123,4 @@ def run_planner_agent_json_with_feedback_looping(questions ,files, max_retries=2
             if attempt == max_retries:
                 raise RuntimeError("Gemini planner failed after maximum retries.") from e
             attempt += 1
-
 

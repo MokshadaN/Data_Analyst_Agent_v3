@@ -3,15 +3,12 @@ import os
 import subprocess
 import tempfile
 
-# from llm_calls.claude_call import claude_call_for_code
+from llm_calls.claude_call import claude_call_for_code
 from prompts import PromptManager
 from llm_calls.gemini_llm import gemini_call_for_code  # updated import
-# from llm_calls.openai_call import openai_call_for_code_responses
+from llm_calls.openai_call import openai_call_for_code_responses
 import time
-from dotenv import load_dotenv
-load_dotenv()
 
-import os
 os.makedirs("generated_code", exist_ok=True)
 
 
@@ -25,12 +22,18 @@ def execute_plan_v1(plan, questions , data_files, max_retries=3):
         print("[EXECUTE] Detected S3-related questions → using execute_s3 prompt")
         system_prompt, user_prompt = pm.execute_s3(plan, questions, data_files)
         max_retries = 8 
+    
+    
     else:
         print("[EXECUTE] No S3 detected → using execute_entire_plan_v2 prompt")
         system_prompt, user_prompt = pm.execute_entire_plan_v2(plan, questions, data_files)# First attempt
+    
+    system_prompt += "\nIMPORTANT: Final output must be valid JSON only. "\
+            "Always do: import json; print(json.dumps(result, ensure_ascii=False, indent=2)) "\
+            "at the end of the script. No other prints."
 
     print("[EXECUTE] 2 Generating Code")
-    code = gemini_call_for_code(system_prompt, user_prompt, None)
+    code = claude_call_for_code(system_prompt, user_prompt, None)
     with open("temp.py", "w", encoding="utf-8", newline="\n") as f:
         f.write(code)
 
@@ -75,7 +78,7 @@ def execute_plan_v1(plan, questions , data_files, max_retries=3):
         print("[EXECUTE][RETRY] Code ")
         sys_repair_prompt , user_repair_prompt = _build_repair_prompt(system_prompt, plan, questions,data_files, code, error)
         print("[EXECUTE][RETRY] Built Repair Prompt and Calling Gemini API")
-        code = gemini_call_for_code(sys_repair_prompt,user_repair_prompt, None)
+        code = claude_call_for_code(sys_repair_prompt,user_repair_prompt, str(questions))
         print("[EXECUTE][RETRY] Got the new code from gemini")
         with open("temp.py", "w", encoding="utf-8", newline="\n") as f:
             f.write(code)
@@ -175,5 +178,3 @@ def _build_repair_prompt(system_prompt, plan,questions, data_files, prev_code, e
     )
 
     return repair_system_prompt, repair_user_prompt
-
-
