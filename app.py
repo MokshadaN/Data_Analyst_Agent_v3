@@ -1,3 +1,7 @@
+# /// script
+# dependencies = ["fastapi", "uvicorn", "python-multipart","google-genai","pydantic", "requests", "Pillow"]
+# ///
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -25,7 +29,45 @@ from datetime import datetime
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
 import shutil
+from llm_calls.claude_call import claude_call_for_code
+
+
+import re, tempfile
+import pandas as pd
+import requests
+import pdfplumber
+from urllib.parse import urlparse
+import os
+import re
+import hashlib
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+from io import StringIO
+import os
+import re
+import requests
+import pandas as pd
+from bs4 import BeautifulSoup
+import re
+import pandas as pd
+import re
+import pandas as pd
+from collections import Counter
+import re
+from collections import Counter
+import pandas as pd
+import os
+import re
+import requests
+import pandas as pd
+from bs4 import BeautifulSoup
+from io import StringIO
+
 # ---- Create logs folder and per-run subfolder ----
+REQUEST_TIME_LIMIT = 300  # seconds = 5 minutes
+
+
 BASE_LOG_DIR = "logs"
 os.makedirs(BASE_LOG_DIR, exist_ok=True)
 
@@ -101,7 +143,6 @@ async def ui(request: Request):
 # Config
 # -------------------------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# GEMINI_API_KEY = "AIzaSyCJqJjDOQW1KdgEknnRrh5V5dzKbKNoSas"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 
@@ -136,7 +177,7 @@ def _is_pdf(content_type: str, filename: str) -> bool:
     return ext == ".pdf" or ct in {"application/pdf"}
 
 
-def get_image_description(image_path_or_url: str, max_retries: int = 5) -> str:
+def get_image_description(image_path_or_url: str, questions , max_retries: int = 5) -> str:
     """Returns a concise description for a local image path or URL using Gemini."""
     _client = genai.Client(api_key="AIzaSyDh7TfjKwBEI2eoE4xObDfyBbRh25YGe8k")
 
@@ -153,12 +194,12 @@ def get_image_description(image_path_or_url: str, max_retries: int = 5) -> str:
     for attempt in range(max_retries):
         try:
             response = _client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-2.5-pro",
                 contents=[
-                    "Generate a detailed description of this image. ",
+                    "Generate description of this image required for solving the questions ",
                     "If any numerical data mention that as well",
-                    "Give a detailed description and understanding from the image",
-                    image
+                    image,
+                    f"And also get the information from this image needed to answer {questions} get exactly correct interpretations "
                 ]
             )
             text = getattr(response, "text", "").strip()
@@ -414,12 +455,6 @@ def get_pdf_metadata(file_path: str, max_pages: int = 5, max_text_chars: int = 4
         }
 
 
-import re, tempfile
-import pandas as pd
-import requests
-import pdfplumber
-from urllib.parse import urlparse
-
 _URL_RE = re.compile(r'https?://[^\s)>\]"\']+', re.I)
 
 def _extract_urls(text: str):
@@ -540,87 +575,6 @@ def _extract_urls_comprehensive(text: str) -> List[str]:
     
     return cleaned_urls
 
-def _detect_source_type_from_ct(ct: str, url: str):
-    ct = (ct or "").lower()
-    path = urlparse(url).path.lower()
-    if "json" in ct or path.endswith(".json"): return "json"
-    if "csv" in ct or path.endswith(".csv"): return "csv"
-    if "pdf" in ct or path.endswith(".pdf"): return "pdf"
-    # heuristic: html or unknown
-    if "html" in ct or not ct: return "html"
-    return "unknown"
-
-from bs4 import BeautifulSoup
-import re
-
-def detect_noisy_values(table_html, headers):
-    noisy_values = {}
-    try:
-        soup = BeautifulSoup(table_html, "lxml")
-        rows = soup.find_all("tr")
-        data_rows = []
-        for row in rows[1:]:  # skip header row
-            cells = [cell.get_text(strip=True) for cell in row.find_all(["td", "th"])]
-            if len(cells) == len(headers):  # only keep matching length
-                data_rows.append(cells)
-
-        if not data_rows:
-            return noisy_values  # no clean rows to check
-
-        df = pd.DataFrame(data_rows, columns=headers)
-
-        for col in df.columns:
-            col_vals = df[col].dropna().astype(str)
-            # Check if majority are numeric
-            num_like_ratio = col_vals.str.match(r"^\d+(\.\d+)?$").sum() / len(col_vals)
-            if num_like_ratio > 0.5:
-                # Find values with extra non-numeric characters (noisy)
-                noise = col_vals[col_vals.str.contains(r"[^\d.,-]", regex=True)].unique().tolist()
-                if noise:
-                    noisy_values[col] = noise
-
-    except Exception as e:
-        noisy_values["_error"] = str(e)
-
-    return noisy_values
-
-import os
-import re
-import hashlib
-import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-from io import StringIO
-import os
-import re
-import requests
-import pandas as pd
-from bs4 import BeautifulSoup
-
-def _detect_source_type_from_ct(ct, url):
-    if "html" in ct:
-        return "html"
-    elif "csv" in ct or url.endswith(".csv"):
-        return "csv"
-    elif "json" in ct or url.endswith(".json"):
-        return "json"
-    elif "pdf" in ct or url.endswith(".pdf"):
-        return "pdf"
-    else:
-        return "unknown"
-import re
-import pandas as pd
-from collections import Counter
-import re
-from collections import Counter
-import pandas as pd
-import os
-import re
-import requests
-import pandas as pd
-from bs4 import BeautifulSoup
-from io import StringIO
-
 def _detect_source_type_from_ct(ct, url):
     ct = (ct or "").lower()
     if "html" in ct:
@@ -632,8 +586,6 @@ def _detect_source_type_from_ct(ct, url):
     if "pdf" in ct or url.lower().endswith(".pdf"):
         return "pdf"
     return "unknown"
-import re
-import pandas as pd
 
 def detect_noisy_values_simple(df: pd.DataFrame, max_examples: int = 3) -> dict:
     """
@@ -815,18 +767,28 @@ def get_metadata_url(u):
     system_prompt = """
 You are a URL classifier and metadata extraction expert.
 You MUST respond with a valid JSON object with the following boolean fields:
-- js_rendering: true if the page requires dynamic JavaScript rendering to access content
-- pagination: true if the page requires visiting multiple pages to get complete data
-- has_tables: true if the page has one or more structured HTML tables
-- is_api: true if the page is an API endpoint (and requires extraction parameters)
-Do NOT scrape or fetch heavy content. Just classify based on the URL and known patterns.
-Do NOT add any extra commentary — JSON only.
+
+- js_rendering: true if the page requires dynamic JavaScript rendering to access content (e.g., IMDb, LinkedIn, Glassdoor, etc.).
+- pagination: true if the page requires visiting multiple pages to get complete data.
+- has_tables: true if the page has one or more structured HTML tables.
+- is_api: true if the page is an API endpoint, meaning it contains placeholders for parameters (e.g., www.example.com/{{param}}/id=2) OR returns structured data like JSON/CSV.
+- has_dynamic_params: true if the URL contains query parameters (e.g., '?key=value') that filter or sort the data, such as 'user_rating=', 'num_votes=', 'sort=', 'page=', etc.
+
+Special IMDb note:
+- Always set "js_rendering": true for IMDb URLs.
+- Always set "pagination": true for IMDb search/list URLs.
+- If the IMDb URL contains parameters like 'user_rating=', 'num_votes=', 'sort=', also set "has_dynamic_params": true.
+
+Do NOT scrape or fetch heavy content.
+Do NOT add any commentary — JSON only.
+
 Example output:
 {
   "js_rendering": true,
   "pagination": true,
-  "has_tables": true,
-  "is_api": false
+  "has_tables": false,
+  "is_api": false,
+  "has_dynamic_params": true
 }
 """
 
@@ -924,6 +886,7 @@ ENSURE THAT THE FORMAT IS ALWAYS CORRECT AND MATCHES THE ONE ASKED IN THE QUESTI
 {questions}
     """
     try:
+        print("Generating Dummy Data")
         response = client.models.generate_content(
             model="gemini-2.0-flash",
             contents=user_ans,
@@ -961,8 +924,8 @@ def read_root():
 @app.post("/api")
 async def upload_files(request: Request):
     try:
-        start = time.time()
-        print(start)
+        request_start_time = time.time()
+        print(request_start_time)
         upload_dir = pathlib.Path("uploads")
         upload_dir.mkdir(parents=True, exist_ok=True)
 
@@ -999,7 +962,7 @@ async def upload_files(request: Request):
 
                 # If it's an image, generate and store description
                 if _is_image_content_type(content_type) or _is_image_filename(filename):
-                    file_info["image_description"] = get_image_description(str(file_path))
+                    file_info["image_description"] = get_image_description(str(file_path),questions)
                     print("Image description generated", file_info["image_description"])
 
                 # If it's a CSV, attach lightweight schema + sample row
@@ -1046,8 +1009,12 @@ async def upload_files(request: Request):
         plan = run_planner_agent_json_with_feedback_looping(questions,data_files)
         save_to_log_folder("plan.json", plan)
         print("[APP] 4 GOT THE PLAN")
+        elapsed = time.time() - request_start_time
+        remaining_time = max(1, REQUEST_TIME_LIMIT - elapsed)
+
+        logging.info(f"Planning took {elapsed:.2f}s, time left for execution: {remaining_time:.2f}s")
+
         
-        # return JSONResponse({"plan" : plan})
         if isinstance(plan, (dict, list)):
             # plan.json
             with open("plan.json", "w", encoding="utf-8") as f:
@@ -1056,17 +1023,18 @@ async def upload_files(request: Request):
         else:
             with open("plan.txt", "w", encoding="utf-8", errors="replace") as f:
                 f.write(str(plan))
+        # return JSONResponse({"plan" : plan})
         # return JSONResponse({"Questions":questions,"data files":data_files,"plan":plan})
         # return JSONResponse({"plan" : plan , "files" : data_files})
 
         print("[APP] 5 CALLING EXECUTE PLAN ")
-        result = execute_plan_v1(plan, questions , data_files)
+        result = execute_plan_v1(plan, questions , data_files, timeout_for_execution=remaining_time)
         print(result)
         print("[APP] 6 PLAN EXECUTED SUCCESSFULLY WITH THE RESULT")
-        end = time.time()
-        print("Starting",start)
-        print("Ending",end)
-        print(end-start)
+        total_time = time.time() - request_start_time
+        elapsed = time.time() - request_start_time
+        time_left = max(1, REQUEST_TIME_LIMIT - elapsed)
+        logging.info(f"✅ Entire pipeline completed in {total_time:.2f} seconds")
         try:
             parsed = json.loads(result)
             results = {"status": "success"}  # Example
@@ -1099,5 +1067,4 @@ async def upload_files(request: Request):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
 

@@ -65,6 +65,8 @@ General Coding Rules:
    - Encode the buffer to base64 and prepend the correct MIME type.
    - If the encoded string exceeds 100,000 characters, reduce DPI or figure size and retry.
    - Always call plt.close() after saving.
+   - Make the chart in such a way that it gives efficient results that can be inferred from the graph
+   - Always choose the x-axis limits and y-axis limits wisely
 
 6. **Results Formatting**
 - Print ONLY `json.dumps(result)` to STDOUT; no extra text before/after.
@@ -128,16 +130,6 @@ General Coding Rules:
         return system_prompt, user_prompt
 
 
-    def execute_html(self,plan,questions,data_files):
-        system_prompt = """
-        
-"""
-
-        user_prompt = """
-
-
-"""
-        return system_prompt,user_prompt
     def execute_entire_plan_v2(self, plan: str, questions: str , data_files: str):
         
         system_prompt = """
@@ -148,7 +140,6 @@ General Coding Rules:
         **ABSOLUTE PROHIBITION ON DUMMY DATA**:
         - NEVER create, generate, write, or substitute dummy data under ANY circumstances
         - NEVER create placeholder datasets or synthetic data
-        - If source data is unavailable, missing, or corrupted: FAIL IMMEDIATELY with clear error message
         - Do not populate missing files with generated content
         - ** FOR URLS ** with noisy values match them using regex and get the numerical data DO NOT DROP THESE ROWS AT ANY COST
         - The return types for each questions must be json serialisable so that the final results json can be computed without any errors
@@ -157,6 +148,7 @@ General Coding Rules:
         - ** FOR URLS ** with noisy values match them using regex and get the numerical data DO NOT DROP THESE ROWS AT ANY COST
         - Always source the required data first then answer the questions
         - Generate complete, executable Python code from structured JSON plans
+        - Always Refer and validate the plan before using it to answer any question
         - Handle all data sourcing, cleaning, analysis, and visualization steps using ONLY existing data sources
         - Implement comprehensive error handling and validation for actual data issues
         - Ensure proper dependency management between steps
@@ -201,7 +193,9 @@ General Coding Rules:
             * Large JSON: Use ijson for streaming large files, pandas.json_normalize for structured data
 
         ##### DATA_ANALYSIS Tool:
+        - ** FOR FILES ATTACHED ** go through all the files to understand the analysis questions and refer and validate the plan before using it to answer any question
         - ** FOR URLS ** with noisy values match them using regex and get the numerical data DO NOT DROP THESE ROWS AT ANY COST
+        - If mutliple sources are found make analysis based on all the sources.
         - When executing, if a required value is not directly in the dataset, derive it using other available columns or by combining multiple sources in the plan.
         - Always document the calculation method in the result.
         - **Derived Insights**: Look beyond direct column values to infer meaningful insights. Examples:
@@ -222,6 +216,7 @@ General Coding Rules:
             * For small sample sizes (<30), prefer non-parametric methods unless justified.
         - **Visualization checks**:
             * Use actual sourced data only—no synthetic placeholders.
+            * Create appropriate scales and limits and ranges for x axis and y axis based on data
             * Do not aggregate columns for computations unless explicitly mentioned in the question to do so
             * Verify axis labels, units, and legends are accurate and match the dataset.
             * Match data points in the chart to numeric/statistical outputs.
@@ -356,6 +351,8 @@ Do not load full datasets; data_files already include descriptions. Sources may 
 ### CRITICAL RULES
 - Output **must be valid JSON only** — no markdown fences, no extra text.
 - All keys above are **mandatory**.
+-[MANDATORY] If the sourcing technique is specified in the question itself use it as it is given
+-[MANDATORY] Even if the analysis task is a bit complex try to find a solution by using the given information or scanning the files , never say that the question cannot be answered
 - If the expected format is "JSON array of strings", output exactly that structure — same for any format stated in the question.
 - Values in `results_formatting.example` must be **placeholders indicating types** (e.g., "integer", "float", "string") — never real data.
 - Always include one `data_sourcing` object per relevant source.
@@ -442,27 +439,32 @@ Follow the rules above exactly and return a plan which is a **valid JSON object*
 
     def pdf_instructions(self):
         return """
-        Additional PDF-specific instructions for the `data_sourcing` entries:
-        - Set `"source_type"` to `"pdf"`, include the exact `source_file_path`.
-        - Use `pdfplumber` for text and table extraction by default.
-        - If table headers **repeat on each page**, detect and use that header across all page tables.
-        - If headers **do not** repeat:
-            * Infer headers from the first table that looks header-like, OR
-            * Allow the plan to specify explicit headers from context if required.
-        - Normalize tables into a single pandas DataFrame:
-            * Ensure consistent columns across pages.
-            * If a page lacks headers, apply the inferred/global headers.
-            * Preserve row order by adding `page_index` if helpful.
-        - For text-only PDFs (or mixed content), extract text and:
-            * Apply regex/keywords to locate relevant sections.
-            * Parse semi-structured lists/tables into rows when possible.
-        - Validation:
-            * Confirm DataFrame is non-empty before analysis.
-            * If both text and tables exist, prefer tables for quantitative tasks; fall back to text parsing otherwise.
-        - Error handling:
-            * If `pdfplumber` fails for certain pages, skip gracefully and continue with others.
-            * If tables are split across pages, concatenate after applying consistent headers.
-        """
+Additional PDF-specific instructions for the `data_sourcing` entries:
+- Set `"source_type"` to `"pdf"`, include the exact `source_file_path`.
+- Use `pdfplumber` for text and table extraction by default.
+- If table headers **repeat on each page**, detect and use that header across all page tables.
+- If headers **do not** repeat:
+    * Infer headers from the first table that looks header-like, OR
+    * Allow the plan to specify explicit headers from context if required.
+- Normalize tables into a single pandas DataFrame:
+    * Ensure consistent columns across pages.
+    * If a page lacks headers, apply the inferred/global headers.
+    * Preserve row order by adding `page_index` if helpful.
+- Data cleaning:
+    * Strip whitespace from headers and cells.
+    * Remove `$`, `%`, and `,` from numeric strings before casting.
+    * Handle merged cells by forward-filling where appropriate.
+- For text-only PDFs (or mixed content), extract text and:
+    * Apply regex/keywords to locate relevant sections.
+    * Parse semi-structured lists/tables into rows when possible.
+- Validation:
+    * Confirm DataFrame is non-empty before analysis.
+    * Check that all expected columns are present for the question requirements.
+    * If both text and tables exist, prefer tables for quantitative tasks; fall back to text parsing otherwise.
+- Error handling:
+    * If `pdfplumber` fails for certain pages, skip gracefully and continue with others.
+    * If tables are split across pages, concatenate after applying consistent headers.
+    """
 
     def s3_instructions(self):
         return """
@@ -644,23 +646,84 @@ Fill with *actual extracted values* ONLY IF THERE IS A NEED OF SOURCING FROM A T
 """
 
 
-    def url_js_rendering_prompt(self):
+    def url_js_rendering_prompt():
         return """
-### JS-RENDERING-SPECIFIC INSTRUCTIONS
-- Explicitly mention that the site **requires JavaScript execution** to load the data.
-- Clearly state which DOM elements, IDs, or classes should be targeted for each metric.
-- Include transformations such as:
-  - Converting numeric strings (e.g., "₹1,234 Cr") into floats or integers.
-  - Removing currency symbols, commas, and units before numeric conversion.
-  - Normalizing date formats.
-- Include validation checks to ensure:
-  - All required elements are found on the page.
-  - Extracted data types are correct (e.g., revenue as float, sector as string).
-  - No unexpected null values remain in critical fields.
+**MANDATORY INSTRUCTIONS FOR JAVASCRIPT-RENDERED URL SOURCING**
 
-The provided URL is JavaScript-rendered and may require dynamic interaction to retrieve financial and company information. Plan the sourcing step to use **Playwright** to render the page, extract the required values using targeted selectors, and apply all necessary cleaning, transformation, and validation steps.
+1. **Use Playwright / Headless Browser**
+   - Always load the page with a headless browser that supports JavaScript rendering.
+   - Wait until `networkidle` or DOM load complete before extracting.
+   - Scroll to the bottom if the page uses lazy-loading.
 
+2. **Precise Table Extraction**
+   - Identify a **unique table identifier** (CSS selector, XPath, or DOM attribute).
+   - Extract table HTML **exactly as rendered** after JS execution.
+   - Include the *raw HTML snippet* in the `special_instructions` for verification.
+   - Provide `columns` list and `row_samples` (first 2–3 rows after cleaning).
 
+3. **Pagination / Multiple Pages**
+   - Detect "Next" buttons, numbered pagination, or infinite scroll.
+   - Iterate through all pages, aggregating rows.
+   - Stop only when no more pages exist or pagination is disabled.
+
+4. **Cleaning / Normalization**
+   - Remove non-data symbols (footnotes, commas, special characters).
+   - Cast numeric-looking columns to numeric types, dates to `DATE` type.
+   - Handle noisy values by listing them in `noisy_values_per_column`.
+
+5. **MANDATORY Additional Fields in Sourcing Schema in Plan**
+   - `"unique_table_identifier"`: string (CSS or XPath)
+   - `"code_to_get_table"`: minimal JS or Python snippet to locate & extract
+   - `"raw_html_snippet"`: table HTML sample
+   - `"columns"`: [ "ColA", "ColB", ... ]
+   - `"noisy_values_per_column"`: { "ColA": ["..."], ... }
+   - `"row_samples"`: [{ "ColA": "...", "ColB": "..." }, ...]
+
+6. **Validation Rules**
+   - Check table is non-empty after JS rendering.
+   - Ensure extracted row count matches expected from page summary (if available).
+   - Log total rows and columns extracted for debugging.
+
+**Remember**: No dummy data. If table not found, fail with descriptive error message.
+"""
+
+    def url_dynamic_params_prompt(self):
+        return """
+**MANDATORY INSTRUCTIONS FOR URLS WITH DYNAMIC PARAMETERS**
+
+### 1. Parameter Identification
+- Examine the provided base URL for query parameters (text after `?` in the URL, separated by `&`).
+- Identify each parameter name and value (e.g., `user_rating=9,`, `num_votes=500,`, `sort=user_rating,desc`).
+- Parameters may control filtering, sorting, or pagination — they must be preserved for accuracy.
+- If a question requires additional filtering (e.g., "shows after 2015", "movies in Hindi"), determine if an equivalent parameter exists on the site:
+  - If it exists, add it to the URL as a new query parameter.
+  - If it does not exist, scrape the filtered subset in Python after retrieving the data.
+
+### 2. Sourcing URL Per Question
+[MANDATORY]- For **each question** in the plan:
+  - Start with the base URL.
+  - Include **all original parameters** exactly as given.
+  - Append or modify parameters only if the question explicitly changes the filter/sort context.
+  - Keep pagination parameters (`page=`, `start=`, etc.) separate so they can be incremented during scraping.
+  - NEVER remove the original parameters — they define the dataset context.
+
+### 3. Pagination
+- Always preserve all parameters when moving to the next page.
+- Modify only the pagination-specific parameter (`page=`, `start=`, etc.).
+
+### 4. JS Rendering
+- If `js_rendering=true`, always use Playwright or another headless browser.
+- Navigate by URL (with parameters intact) instead of clicking filters on the page.
+- Wait for network idle or required selectors before scraping.
+
+### 5. Validation
+- After scraping, confirm that every row in the dataset matches **all** parameter-based filters (e.g., ratings ≥ `user_rating`, votes ≥ `num_votes`).
+- If a mismatch occurs, re-check if a parameter was dropped or altered during pagination.
+
+### 6. Safety & Consistency
+- Do NOT hardcode parameter values unless given in the question or base URL.
+- Do NOT guess parameters — only use documented or visible query params from the site.
+- For each generated sourcing step, **output the final constructed URL** alongside the scraping code in the plan.
 """
 
     def url_pagination_prompt(self):
@@ -685,7 +748,7 @@ The provided URL is JavaScript-rendered and may require dynamic interaction to r
     - Use `pandas.read_html` to extract all tables from the page.
     - Identify all tables relevant to the user’s questions — there may be more than one.
     - Do not assume the first table is the only one; consider all tables and their relationships.
-    - If no relevant table is found, parse raw HTML elements (e.g., lists, `<div>` blocks, `<span>` text) using BeautifulSoup or lxml.
+    - If no relevant table is found, parse raw HTML elements (e.g., lists, `<div>` blocks, `<span>` text) using BeautifulSoup or lxml and PLaywright.
 
     ---
 
@@ -745,7 +808,6 @@ The provided URL is JavaScript-rendered and may require dynamic interaction to r
             "Plan the sourcing step to extract the relevant textual information using an HTML parser such as BeautifulSoup, "
             "applying targeted selectors to isolate required data."
         )
-
 
     def html_instructions(self):
         return """

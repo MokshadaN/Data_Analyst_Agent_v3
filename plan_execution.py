@@ -11,89 +11,116 @@ import time
 
 os.makedirs("generated_code", exist_ok=True)
 
-
-def execute_plan_v1(plan, questions , data_files, max_retries=3):
-    """Generate and execute code for a given plan with a repair loop."""
+def execute_plan_v1(plan, questions, data_files, timeout_for_execution=300, max_retries=3):
+    """Generate and execute code for a given plan with fallback LLMs."""
     print("[EXECUTE] 1 Executing Plan")
     pm = PromptManager()
+
     # Detect S3 presence
     s3_present = "s3://" in questions.lower() or "s3://" in json.dumps(plan).lower()
     if s3_present:
         print("[EXECUTE] Detected S3-related questions → using execute_s3 prompt")
         system_prompt, user_prompt = pm.execute_s3(plan, questions, data_files)
-        max_retries = 8 
-    
-    
+        max_retries = 8
     else:
         print("[EXECUTE] No S3 detected → using execute_entire_plan_v2 prompt")
-        system_prompt, user_prompt = pm.execute_entire_plan_v2(plan, questions, data_files)# First attempt
-    
-    system_prompt += "\nIMPORTANT: Final output must be valid JSON only. "\
-            "Always do: import json; print(json.dumps(result, ensure_ascii=False, indent=2)) "\
-            "at the end of the script. No other prints."
+        system_prompt, user_prompt = pm.execute_entire_plan_v2(plan, questions, data_files)
 
-    print("[EXECUTE] 2 Generating Code")
-    code = claude_call_for_code(system_prompt, user_prompt, None)
+    system_prompt += "\nIMPORTANT: Final output must be valid JSON only. " \
+                     "Always do: import json; print(json.dumps(result, ensure_ascii=False, indent=2)) " \
+                     "at the end of the script. No other prints."
+
+    # --------- Primary: Claude ----------
+    print("[EXECUTE] 2 Generating Code with Claude")
+    try:
+        code = claude_call_for_code(system_prompt, user_prompt, None)
+    except Exception as e:
+        print(f"[EXECUTE] Claude call failed immediately: {e}")
+        code = None
+
+    # If Claude fails completely, fallback to OpenAI
+    if not code:
+        print("[EXECUTE] Claude failed, trying OpenAI")
+        try:
+            code = openai_call_for_code_responses(system_prompt, user_prompt, None)
+        except Exception as e:
+            print(f"[EXECUTE] OpenAI call failed immediately: {e}")
+            code = None
+
+    # If both Claude and OpenAI fail, fallback to Gemini
+    if not code:
+        print("[EXECUTE] Both Claude and OpenAI failed, trying Gemini")
+        try:
+            code = gemini_call_for_code(system_prompt, user_prompt, None)
+        except Exception as e:
+            print(f"[EXECUTE] Gemini call failed too: {e}")
+            return {"error": "All LLMs failed to generate code"}
+
+    # Save generated code
     with open("temp.py", "w", encoding="utf-8", newline="\n") as f:
         f.write(code)
+    with open(f"generated_code/initial_{int(time.time()*1000)}.py", "w", encoding="utf-8") as _f:
+        _f.write(code)
 
-    with open(f"generated_code/initial_{int(time.time()*1000)}.py","w", encoding="utf-8") as _f: _f.write(code)
-    print("[EXECUTE] 3 Code successfully generated")
-    ok, output, error = _run_and_validate_json(code)
-    with open(f"generated_code/retry_{int(time.time()*1000)}.txt","w", encoding="utf-8") as _f:
+    print("[EXECUTE] 3 Code successfully generated (after fallback if needed)")
+
+    # --------- Execute initial code ----------
+    ok, output, error = _run_and_validate_json(code, timeout_sec=timeout_for_execution)
+    with open(f"generated_code/run_{int(time.time()*1000)}.txt", "w", encoding="utf-8") as _f:
         _f.write(f"ok={ok}\n")
         _f.write((output or "") + "\n")
         _f.write((error or "") + "\n")
-    print("[EXECUTE] 4 After the Execution", ok, str(output)[:100], error)
-
-    # Extra semantic validation: detect known error patterns in the JSON output
-    if ok:
-        try:
-            parsed_json = json.loads(output)
-            # If the JSON contains an "error" key with a message, treat as failure
-            if (isinstance(parsed_json, dict) 
-                and "error" in parsed_json 
-                and isinstance(parsed_json["error"], str) 
-                and parsed_json["error"].strip()):
-                print("[EXECUTE] Detected error in JSON output:", parsed_json["error"])
-                ok = False
-                error = parsed_json["error"]
-            # Also detect known DuckDB/SQL error phrases embedded in other values
-            elif any(
-                isinstance(v, str) and "Binder Error" in v 
-                for v in (parsed_json.values() if isinstance(parsed_json, dict) else [])
-            ):
-                print("[EXECUTE] Detected DuckDB Binder Error in JSON output")
-                ok = False
-                error = "DuckDB Binder Error in JSON output"
-        except Exception as e:
-            print("[EXECUTE] Failed to parse JSON for semantic error check:", e)
+    print("[EXECUTE] 4 After execution:", ok, str(output)[:100], error)
 
     if ok:
         return output
 
+    # --------- Retry Loop (still with fallback) ----------
+    for attempt in range(max_retries):
+        print(f"[EXECUTE][RETRY {attempt+1}] Building repair prompt")
+        sys_repair_prompt, user_repair_prompt = _build_repair_prompt(system_prompt, plan, questions, data_files, code, error)
 
-    # Retry loop with feedback
-    for _ in range(max_retries):
-        print("[EXECUTE][RETRY] Code ")
-        sys_repair_prompt , user_repair_prompt = _build_repair_prompt(system_prompt, plan, questions,data_files, code, error)
-        print("[EXECUTE][RETRY] Built Repair Prompt and Calling Gemini API")
-        code = claude_call_for_code(sys_repair_prompt,user_repair_prompt, str(questions))
-        print("[EXECUTE][RETRY] Got the new code from gemini")
+        # Try Claude repair first
+        try:
+            code = claude_call_for_code(str(sys_repair_prompt), str(user_repair_prompt), str(questions))
+        except Exception as e:
+            print(f"[RETRY] Claude repair failed: {e}")
+            code = None
+
+        # If Claude fails, try OpenAI
+        if not code:
+            try:
+                code = openai_call_for_code_responses(str(sys_repair_prompt), str(user_repair_prompt), str(questions))
+            except Exception as e:
+                print(f"[RETRY] OpenAI repair failed: {e}")
+                code = None
+
+        # If both fail, try Gemini
+        if not code:
+            try:
+                code = gemini_call_for_code(str(sys_repair_prompt), str(user_repair_prompt), str(questions))
+            except Exception as e:
+                print(f"[RETRY] Gemini repair failed: {e}")
+                continue  # try next attempt
+
+        # Save repaired code
         with open("temp.py", "w", encoding="utf-8", newline="\n") as f:
             f.write(code)
-        with open(f"generated_code/retry_{int(time.time()*1000)}.py","w", encoding="utf-8") as _f: _f.write(code)
-        ok, output, error = _run_and_validate_json(code)
-        print("[EXECUTE][RETRY] Executed the Code")
-        with open(f"generated_code/retry_{int(time.time()*1000)}.txt","w", encoding="utf-8") as _f:
+        with open(f"generated_code/retry_{int(time.time()*1000)}.py", "w", encoding="utf-8") as _f:
+            _f.write(code)
+
+        ok, output, error = _run_and_validate_json(code, timeout_sec=timeout_for_execution)
+        with open(f"generated_code/retry_result_{int(time.time()*1000)}.txt", "w", encoding="utf-8") as _f:
             _f.write(f"ok={ok}\n")
             _f.write((output or "") + "\n")
             _f.write((error or "") + "\n")
-        
+
         if ok:
             return output
 
     return error
+
+
 # --- in plan_execution.py ---
 import sys, os, json, tempfile, subprocess
 

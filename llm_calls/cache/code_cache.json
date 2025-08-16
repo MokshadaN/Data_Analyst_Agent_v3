@@ -1,0 +1,3 @@
+{
+  "b26e0ebe12649e652a3f65944ecbdafd10560f0effb3dca6e8febef0b1af137d": "import pandas as pd\n\n# Create the DataFrame\ndata = {'A': [1, 2, 3, 4, 5],\n        'B': [1, 2, 3, 4, 5]}\ndf = pd.DataFrame(data)\n\n# Calculate the sum of column A\nsum_of_a = df['A'].sum()\n\n# Print the sum\nprint(sum_of_a)"
+}

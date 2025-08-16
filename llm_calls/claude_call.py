@@ -58,7 +58,7 @@ def claude_call_for_code(
                 model=ANTHROPIC_MODEL_DEFAULT,
                 system=system_prompt,
                 temperature=0,
-                max_tokens=4096,  # adjust as needed
+                max_tokens=7000,  # adjust as needed
                 messages=[
                     {"role": "user", "content": contents}
                 ],

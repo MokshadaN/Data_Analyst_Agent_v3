@@ -42,30 +42,29 @@ def run_planner_agent_json_with_feedback_looping(questions ,files, max_retries=2
     # print("11")
     url_present = any(f.get("source_type")=="url" for f in files)
     file_prompts = []
-    if url_present:
-        print("Url present")
-        for f in files:
-            if f.get("source_type") == "url":
-                info = f.get("information", {})
-
-                if info.get("js_rendering"):
-                    file_prompts.append(prompt_manager.url_js_rendering_prompt())
-
-                if info.get("pagination"):
-                    file_prompts.append(prompt_manager.url_pagination_prompt())
-
-                if info.get("has_tables"):
-                    file_prompts.append(prompt_manager.url_table_prompt())
-
-                if info.get("is_api"):
-                    file_prompts.append(prompt_manager.url_api_prompt())
-
-                if not any([info.get("has_tables"), info.get("is_api")]):
-                    file_prompts.append(prompt_manager.url_text_only_prompt())
-
     if s3_present:
         # file_prompts.append(prompt_manager.new_planner_agent_prompt())
         file_prompts.append(prompt_manager.s3_instructions())
+    elif url_present:
+        print("Url present")
+        for f in files:
+            if f.get("source_type") == "url":
+                if f.get("has_dynamic_params"):
+                    file_prompts.append(prompt_manager.url_dynamic_params_prompt())
+                if f.get("js_rendering"):
+                    file_prompts.append(prompt_manager.url_js_rendering_prompt())
+
+                if f.get("pagination"):
+                    file_prompts.append(prompt_manager.url_pagination_prompt())
+
+                if f.get("has_tables"):
+                    file_prompts.append(prompt_manager.url_table_prompt())
+
+                if f.get("is_api"):
+                    file_prompts.append(prompt_manager.url_api_prompt())
+
+                if not any([f.get("has_tables"), f.get("is_api"), f.get("pagination") , f.get("")]):
+                    file_prompts.append(prompt_manager.url_text_only_prompt())
     elif html_present:
         print("Html present")
         # file_prompts.append(prompt_manager.html_instructions())
