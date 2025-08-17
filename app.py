@@ -63,7 +63,8 @@ import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 from io import StringIO
-
+import os, json, re
+from typing import Any, Dict
 # ---- Create logs folder and per-run subfolder ----
 REQUEST_TIME_LIMIT = 300  # seconds = 5 minutes
 
@@ -278,45 +279,177 @@ def get_csv_metadata(file_path: str, sample_rows: int = 1) -> dict:
         # Keep it resilient; upstream can still process the file even if metadata fails
         return {"columns": [], "dtypes": {}, "sample_row": {}}
 
+
+
+def _summarize(obj: Any, max_list_items=3, max_keys=20, max_str_len=120, _depth=0):
+    """
+    Return a compact preview instead of the full object.
+    - Lists: {"type":"list","len":N,"sample":[...]}
+    - Dicts: only first `max_keys` keys (preserving order if possible)
+    - Strings: truncated to `max_str_len`
+    - Other scalars: returned as-is
+    """
+    if isinstance(obj, dict):
+        out = {}
+        count = 0
+        for k, v in obj.items():
+            if count >= max_keys:
+                out["…"] = f"{len(obj) - max_keys} more keys"
+                break
+            out[k] = _summarize(v, max_list_items, max_keys, max_str_len, _depth+1)
+            count += 1
+        return out
+    if isinstance(obj, list):
+        sample = [_summarize(x, max_list_items, max_keys, max_str_len, _depth+1)
+                  for x in obj[:max_list_items]]
+        return {"type": "list", "len": len(obj), "sample": sample}
+    if isinstance(obj, str):
+        return (obj[:max_str_len] + "…") if len(obj) > max_str_len else obj
+    return obj  # int/float/bool/None
+
 def get_json_metadata(file_path: str, max_preview_bytes: int = 131072) -> dict:
     """
-    Read a small portion of a JSON file and summarize structure.
-    Handles top-level object or array of objects.
-    Returns keys, types, and a sample item.
+    Summarize JSON structure without dumping the whole file.
+    - If ijson is available, stream and build a small summary of top-level keys.
+    - Otherwise load fully (if reasonably small), but return a summarized preview.
+    - For very large files without ijson, we still avoid returning huge blobs by summarizing.
     """
     try:
-        # Fast path: if small enough, load fully; else stream then parse
-        if os.path.getsize(file_path) <= max_preview_bytes:
+        # Try streaming first (best for large files)
+        try:
+            import ijson  # optional dependency
+            with open(file_path, "rb") as f:
+                # Collect top-level keys and small samples
+                top_type = None
+                keys = []
+                dtypes = {}
+                preview = {}
+
+                # Peek the very first non-space to detect top-level type quickly
+                with open(file_path, "rb") as fpeek:
+                    start = fpeek.read(2048).lstrip()
+                if start.startswith(b"["):
+                    top_type = "array"
+                    # Stream the first few items of the top-level array
+                    items = ijson.items(open(file_path, "rb"), "item")
+                    sample_items = []
+                    for i, it in enumerate(items):
+                        if i >= 3:
+                            break
+                        sample_items.append(_summarize(it))
+                    return {
+                        "top_level_type": "array",
+                        "keys": [],         # arrays have no object keys at top-level
+                        "dtypes": {},       # not applicable
+                        "sample_object": {"type": "list", "len": None, "sample": sample_items},
+                    }
+                else:
+                    top_type = "object"
+                    # Stream top-level keys and small samples for each
+                    parser = ijson.kvitems(open(file_path, "rb"), "")
+                    for i, (k, v) in enumerate(parser):
+                        if i >= 10:  # cap number of top-level keys previewed
+                            preview["…"] = "more keys not shown"
+                            break
+                        keys.append(k)
+                        # dtype at top level
+                        dtypes[k] = type(v).__name__
+                        # summarized value
+                        preview[k] = _summarize(v)
+                    return {
+                        "top_level_type": "object",
+                        "keys": keys,
+                        "dtypes": dtypes,
+                        "sample_object": preview,
+                    }
+        except Exception:
+            # ijson missing or streaming failed; fall back to bounded/full load.
+            pass
+
+        size = os.path.getsize(file_path)
+        # If small-ish, just load and summarize
+        if size <= max_preview_bytes:
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         else:
-            # Stream first N bytes but ensure valid JSON by falling back to full load on failure
+            # Read a chunk to try to infer shape; if it fails, load fully
             with open(file_path, "r", encoding="utf-8") as f:
-                chunk = f.read(max_preview_bytes)
-            try:
-                data = json.loads(chunk)
-            except Exception:
-                # As a safe fallback (still bounded by OS limits), try full parse
+                chunk = f.read(max_preview_bytes).lstrip()
+            # If clearly an array, try to parse just the first item manually
+            if chunk.startswith("["):
+                # crude first-item extractor: find first '{...}' block
+                buf = chunk
+                # ensure we have a full first object; if not, read a bit more
+                if buf.count("{") == 0 or buf.count("{") != buf.count("}"):
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        buf = f.read(max_preview_bytes * 2)
+                # extract first object between braces
+                first_obj = None
+                depth = 0; start_idx = None
+                in_str = False; esc = False
+                for i, ch in enumerate(buf):
+                    if in_str:
+                        if esc:
+                            esc = False
+                        elif ch == "\\":
+                            esc = True
+                        elif ch == '"':
+                            in_str = False
+                        continue
+                    if ch == '"':
+                        in_str = True
+                        continue
+                    if ch == "{":
+                        if depth == 0:
+                            start_idx = i
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0 and start_idx is not None:
+                            first_obj = buf[start_idx:i+1]
+                            break
+                if first_obj:
+                    try:
+                        data = [json.loads(first_obj)]
+                    except Exception:
+                        # As last resort: full load (we'll summarize to keep output tiny)
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                else:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+            else:
+                # Probably an object; load fully (then summarize)
                 with open(file_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
-        # Normalize to an object sample
+        # Build compact metadata (no huge payloads)
         if isinstance(data, list):
-            sample = next((x for x in data if isinstance(x, dict)), {})
+            # Show only a small sample
+            sample = data[:3]
+            sample = _summarize(sample)
+            return {
+                "top_level_type": "array",
+                "keys": [],
+                "dtypes": {},
+                "sample_object": sample,
+            }
         elif isinstance(data, dict):
-            sample = data
+            # keys and dtypes at top-level only; summarize values
+            keys = list(data.keys())[:20]
+            dtypes = {k: type(data[k]).__name__ for k in keys}
+            preview = {k: _summarize(data[k]) for k in keys}
+            # add overflow marker
+            if len(data) > len(keys):
+                preview["…"] = f"{len(data) - len(keys)} more keys"
+            return {
+                "top_level_type": "object",
+                "keys": keys,
+                "dtypes": dtypes,
+                "sample_object": preview,
+            }
         else:
-            return {"top_level_type": type(data).__name__, "keys": [], "sample_object": {}}
-
-        keys = list(sample.keys())
-        dtypes = {k: type(sample.get(k)).__name__ for k in keys}
-
-        return {
-            "top_level_type": "array" if isinstance(data, list) else "object",
-            "keys": keys,
-            "dtypes": dtypes,
-            "sample_object": sample,
-        }
+            return {"top_level_type": type(data).__name__, "keys": [], "dtypes": {}, "sample_object": data}
     except Exception:
         return {"top_level_type": "unknown", "keys": [], "dtypes": {}, "sample_object": {}}
 
