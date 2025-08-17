@@ -158,17 +158,17 @@ def _run_and_validate_json(code: str, timeout_sec: int = 300):
 
         if proc.returncode != 0:
             # Bubble up the real stderr so your repair loop can use it
-            return False, None, stderr or "Script exited with non-zero status."
+            return False, stdout, stderr or "Script exited with non-zero status."
 
         # Validate JSON
         try:
             json.loads(stdout)
             return True, stdout, None
         except json.JSONDecodeError as je:
-            return False, None, f"Invalid JSON output: {je}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            return False, stdout, f"Invalid JSON output: {je}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
 
     except subprocess.TimeoutExpired:
-        return False, None, f"Execution timed out after {timeout_sec}s."
+        return False, stdout, f"Execution timed out after {timeout_sec}s."
     finally:
         try:
             os.remove(code_path)
