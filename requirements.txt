@@ -50,4 +50,5 @@ pytest
 docker
 playwright>=1.40.0
 python-Levenshtein
+pytesseract
 statsmodels
