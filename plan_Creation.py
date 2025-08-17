@@ -18,8 +18,6 @@ from prompts import PromptManager
 import re
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# GEMINI_API_KEY = "AIzaSyCfSRXnvYtJy_4vncmyBwcud-cC2mVBaBE"
-# GEMINI_API_KEY = "AIzaSyDh7TfjKwBEI2eoE4xObDfyBbRh25YGe8k"
 client = genai.Client(api_key=GEMINI_API_KEY)
 prompt_manager = PromptManager()
 
@@ -122,4 +120,5 @@ def run_planner_agent_json_with_feedback_looping(questions ,files, max_retries=2
             if attempt == max_retries:
                 raise RuntimeError("Gemini planner failed after maximum retries.") from e
             attempt += 1
+
 
