@@ -351,8 +351,11 @@ Do not load full datasets; data_files already include descriptions. Sources may 
 ### CRITICAL RULES
 - Output **must be valid JSON only** — no markdown fences, no extra text.
 - All keys above are **mandatory**.
+- For images the text and the required information is already provided no need to extract it using OCR/pytesseract unless strictly required.
+-[MANDATORY] For Multiple sources if on same data try to merge and join them if required.
 -[MANDATORY] If the sourcing technique is specified in the question itself use it as it is given
 -[MANDATORY] Even if the analysis task is a bit complex try to find a solution by using the given information or scanning the files , never say that the question cannot be answered
+- Always check for presence of unclean data in uploaded files
 - If the expected format is "JSON array of strings", output exactly that structure — same for any format stated in the question.
 - Values in `results_formatting.example` must be **placeholders indicating types** (e.g., "integer", "float", "string") — never real data.
 - Always include one `data_sourcing` object per relevant source.
@@ -387,11 +390,12 @@ Follow the rules above exactly and return a plan which is a **valid JSON object*
         - `"instructions"` must specify loading with pandas `pd.read_csv('<file_path>', encoding='<utf-8_or_known_encoding>')`.
         - `"validation"` must include checks for required columns, schema consistency, and duplicate row detection.
         - `"transformations"` must include:
+            * check for noisy or unclean data completely in the csv file and then check what needs to be cleaned
             * Convert numeric-looking columns to `Int64` or `float` while preserving NaN values and cleaning it efficiently for some other text if present.
             * Convert date/time columns to pandas `datetime` early.
             * Keep categorical/ID-like columns as `string` type.
             * Trim leading/trailing whitespace in string columns.
-            * Standardize text case where relevant.
+            * Standardize text case always wherever required as not always will everything be in particular format for analysis.(Example convert all string to lower/upper)
             * Handle missing values explicitly (drop, fill, or coerce).
             * Remove duplicates if unnecessary.
         - Avoid row-by-row loops — use vectorized pandas operations for all transformations and calculations.
